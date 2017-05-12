@@ -135,45 +135,25 @@ public class Peripheral extends BluetoothGattCallback {
     public void onConnectionStateChange(BluetoothGatt gatt, int status, int newState) {
         Log.d(TAG, "onConnectionStateChange: " + status + " : " + newState);
 
-        switch (newState) {
-            case BluetoothProfile.STATE_CONNECTING:
-                Log.d(TAG, "CURRENTLY CONNECTING");
-                return;
-            case BluetoothProfile.STATE_CONNECTED:
-                Log.d(TAG, "SUCCESSFULLY CONNECTED");
-                // an error occurred while attempting to discover services. this is NOT a connection
-                // error
-                if (connected) {
-                    Log.d(TAG, "You are already connected, nothing to do...");
-                    return;
-                }
-                if (!gatt.discoverServices()) {
-                    Log.d(TAG, "Error discovering services of CONNECTED peripheral.");
-                    close(commandContext);
-                }
-                return;
-            case BluetoothProfile.STATE_DISCONNECTING:
-                Log.d(TAG, "CURRENTLY DISCONNECTING");
-                return;
-            case BluetoothProfile.STATE_DISCONNECTED:
-                Log.d(TAG, "SUCCESSFULLY DISCONNECTED");
-                // If we actually issued a disconnect from the door, this is a success, otherwise
-                // we can try to reconnect
-                gatt.close();
-                connected = false;
-                return;
-            default:
-                commandContext.error("An unexpected response was returned from the new locker connection state");
-                Log.d(TAG, "UNEXPECTED STATE" + newState);
+        if (status == BluetoothGatt.GATT_SUCCESS) {
+          if (newState == BluetoothProfile.STATE_CONNECTED) {
+              if (connected) {
+                  Log.d(TAG, "You are already connected, nothing to do...");
+              } else if (!gatt.discoverServices()) {
+                  Log.d(TAG, "Error discovering services of CONNECTED peripheral.");
+                  close(commandContext);
+              }
+          } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+              Log.d(TAG, "SUCCESSFULLY DISCONNECTED");
+              gatt.close();
+              connected = false;
+          }
+        } else {
+          // Error
+          commandContext.error("onConnectionStateChange: status=" + status + " newState=" + newState);
+          Log.d(TAG, "UNEXPECTED STATE" + newState);
+          gatt.close();
         }
-
-        if (status != BluetoothGatt.GATT_SUCCESS) {
-            // do we need a unique error handler to handle unexected error without mashing it
-            // together with connect/disconnect callback handlers?
-            Log.d(TAG, "An unexpected connection error has occured");
-            return;
-        }
-
     }
 
     @Override
