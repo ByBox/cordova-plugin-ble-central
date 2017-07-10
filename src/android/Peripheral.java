@@ -31,13 +31,14 @@ import java.util.*;
 public class Peripheral extends BluetoothGattCallback {
 
     public final static UUID CLIENT_CHARACTERISTIC_CONFIGURATION_UUID = UUIDHelper.uuidFromString("2902");
-    private static final String TAG = "Peripheral";
+    private static final String TAG = "BLEPeripheral";
 
     private BluetoothDevice device;
     private Activity activity;
     private byte[] advertisingData;
     private boolean expectDisconnect = false;
-    private byte reconnectAttempts = 0;
+    private int maxConnectionAttempts = 3;
+    private int connectionAttempt = 1;
     private int advertisingRSSI;
     private boolean connected = false;
     private boolean servicesDiscovered = false;
@@ -48,27 +49,41 @@ public class Peripheral extends BluetoothGattCallback {
     private CallbackContext commandContext;
     private CallbackContext notifyContext;
 
-    public Peripheral(BluetoothDevice device, int advertisingRSSI, byte[] scanRecord) {
+    public Peripheral(BluetoothDevice device, int advertisingRSSI, byte[] scanRecord, int maxConnectionAttempts) {
         this.device = device;
         this.advertisingRSSI = advertisingRSSI;
         this.advertisingData = scanRecord;
+        this.maxConnectionAttempts = maxConnectionAttempts;
+    }
 
+    public Peripheral(BluetoothDevice device, int advertisingRSSI, byte[] scanRecord) {
+        this(device, advertisingRSSI, scanRecord, 3);
+    }
+
+    public Peripheral(BluetoothDevice device) {
+        this(device, 1, null);
     }
 
     // COMMANDS
 
     public void connect(CallbackContext callbackContext, Activity activity) {
-        Log.d(TAG, "Attempting to establish new connection to locker: " + reconnectAttempts);
+        connectionAttempt = 1;
         commandContext = callbackContext;
+        this.activity = activity;
+        reconnect();
+    }
+
+    private void reconnect() {
+        Log.d(TAG, "Attempting to establish new connection to Peripheral, attempt: " + connectionAttempt);
         expectDisconnect = false;
         processing = true;
-        this.activity = activity;
         BluetoothDevice device = this.device;
         gatt = device.connectGatt(activity, false, this);
     }
 
     public void close(CallbackContext callbackContext) {
-        Log.d(TAG, "Attempting to disconnect from a locker.");
+        Log.d(TAG, "Attempting to disconnect from a Peripheral.");
+        connected = false;
         commandContext = callbackContext;
         expectDisconnect = true;
         processing = true;
@@ -91,13 +106,13 @@ public class Peripheral extends BluetoothGattCallback {
     }
 
     /*
-     * This callback is triggered only once when we are trying to establish a connection to the locker.
+     * This callback is triggered only once when we are trying to establish a connection to the Peripheral.
      *
      */
     @Override
     public void onServicesDiscovered(BluetoothGatt gatt, int status) {
         super.onServicesDiscovered(gatt, status);
-        Log.d(TAG, "Attempting to discover locker services"+ status);
+        Log.d(TAG, "Attempting to discover Peripheral services"+ status);
 
         // If we have not been able to discover services what should we do?
         if (status != BluetoothGatt.GATT_SUCCESS) {
@@ -142,6 +157,9 @@ public class Peripheral extends BluetoothGattCallback {
               } else if (!gatt.discoverServices()) {
                   Log.d(TAG, "Error discovering services of CONNECTED peripheral.");
                   close(commandContext);
+              } else {
+                  // Assume connected and services discovered
+                  connected = true;
               }
           } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
               Log.d(TAG, "SUCCESSFULLY DISCONNECTED");
@@ -150,9 +168,15 @@ public class Peripheral extends BluetoothGattCallback {
           }
         } else {
           // Error
-          commandContext.error("onConnectionStateChange: status=" + status + " newState=" + newState);
-          Log.d(TAG, "UNEXPECTED STATE" + newState);
           gatt.close();
+          if (!expectDisconnect && connectionAttempt < maxConnectionAttempts) {
+              // Retry
+              connectionAttempt++;
+              reconnect();
+          } else {
+            commandContext.error("onConnectionStateChange: status=" + status + " newState=" + newState);
+            Log.d(TAG, "UNEXPECTED STATE" + newState);
+          }
         }
     }
 
@@ -241,6 +265,11 @@ public class Peripheral extends BluetoothGattCallback {
             Log.d(TAG, "unable to initiate write descriptor");
             return;
         }
+    }
+
+    public void setDisconnected() {
+        connected = false;
+        Log.d(TAG, "Peripheral Disconnected " + device.getAddress());
     }
 
     // Some devices reuse UUIDs across characteristics, so we can't use service.getCharacteristic(characteristicUUID)

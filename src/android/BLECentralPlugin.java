@@ -71,7 +71,8 @@ public class BLECentralPlugin extends CordovaPlugin implements BluetoothAdapter.
     CallbackContext enableBluetoothCallback;
     CallbackContext onBluetooothStateChangeCallback;
     private boolean expectDisconnect = false;
-    Peripheral activePeripheral;
+
+    Map<String, Peripheral> peripherals = new HashMap<String, Peripheral>();
 
     @Override
     public void initialize(CordovaInterface cordova, CordovaWebView webView) {
@@ -121,15 +122,16 @@ public class BLECentralPlugin extends CordovaPlugin implements BluetoothAdapter.
                 break;
             case CONNECT:
                 macAddress = args.getString(0);
-                commandCallback = callbackContext;
+                //commandCallback = callbackContext;
                 expectDisconnect = false;
                 connect(callbackContext, macAddress);
                 activeState = States.CONNECTED;
                 break;
             case DISCONNECT:
+                macAddress = args.getString(0);
                 commandCallback = callbackContext;
                 expectDisconnect = true;
-                close(callbackContext);
+                close(callbackContext, macAddress);
                 activeState = States.IDLE;
                 break;
             case WRITE:
@@ -168,6 +170,7 @@ public class BLECentralPlugin extends CordovaPlugin implements BluetoothAdapter.
                 break;
             default:
                 LOG.d(TAG, "Invalid action provided");
+                callbackContext.error("Invalid action provided : " + action);
                 return false;
 
         }
@@ -209,7 +212,16 @@ public class BLECentralPlugin extends CordovaPlugin implements BluetoothAdapter.
                     if (!BluetoothDevice.ACTION_ACL_DISCONNECTED.equals(action)) {
                         return;
                     }
-                    Log.d(TAG, "The current action is: " + action);
+
+                    // Device disconnected
+                    BluetoothDevice device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
+                    String macAddress = device.getAddress();
+                    Peripheral peripheral = peripherals.get(macAddress);
+                    if (peripheral != null) {
+                        peripheral.setDisconnected();
+                    }
+
+                    Log.d(TAG, "The current action is: " + action + ", address: " + device.getAddress());
                     if (commandCallback == null) {
                         Log.d(TAG, "We were disconnected, but we don't have a command callback");
                         return;
@@ -229,56 +241,77 @@ public class BLECentralPlugin extends CordovaPlugin implements BluetoothAdapter.
     /*
      * If an
      */
-    public void connect(CallbackContext callbackContext, String macAddress) {
+    public void connect(final CallbackContext callbackContext, String macAddress) {
         Log.d(TAG, "Attempting to connect to: " + macAddress);
-        BluetoothDevice device = bluetoothAdapter.getRemoteDevice(macAddress);
-        Log.d(TAG, "device discovered and retrieved. ready to connect");
-        if (device == null) {
-            callbackContext.error("Could not find the peripheral:" + macAddress);
-            return;
+
+        Peripheral peripheral = peripherals.get(macAddress);
+        if (peripheral == null) {
+            // Unable to locate peripheral
+            BluetoothDevice device = bluetoothAdapter.getRemoteDevice(macAddress);
+            if (device != null) {
+                peripheral = new Peripheral(device);
+                peripherals.put(macAddress, peripheral);
+            }
         }
-        byte[] s = "a".getBytes();
-        activePeripheral = new Peripheral(device, 1, s);
-        if (activePeripheral != null) {
+
+        if (peripheral != null) {
+            final Peripheral peripheralToConnect = peripheral;
             Log.d(TAG, "connecting to peripheral");
-            activePeripheral.connect(callbackContext, cordova.getActivity());
+
+            cordova.getThreadPool().execute(new Runnable() {
+                @Override
+                public void run() {
+                    peripheralToConnect.connect(callbackContext, cordova.getActivity());
+                }
+            });
+
         } else {
             Log.d(TAG, "peripheral not found");
             callbackContext.error("Peripheral " + macAddress + " not found.");
         }
     }
 
-    public void close(CallbackContext callbackContext) {
+    public void close(final CallbackContext callbackContext, String macAddress) {
         Log.d(TAG, "Disconnecting locker");
-        if (activePeripheral == null) {
+        final Peripheral peripheral = peripherals.get(macAddress);
+        if (peripheral == null) {
             return;
         }
-        activePeripheral.close(callbackContext);
+
+        cordova.getThreadPool().execute(new Runnable() {
+            @Override
+            public void run() {
+                peripheral.close(callbackContext);
+            }
+        });
     }
 
     public void write(CallbackContext callbackContext, String macAddress, UUID serviceUUID, UUID characteristicUUID, byte[] data, int writeType) {
-        if (activePeripheral == null) {
+        final Peripheral peripheral = peripherals.get(macAddress);
+        if (peripheral == null) {
             callbackContext.error("Peripheral " + macAddress + " not found.");
             return;
         }
 
-        activePeripheral.write(callbackContext, serviceUUID, characteristicUUID, data, writeType);
+        peripheral.write(callbackContext, serviceUUID, characteristicUUID, data, writeType);
     }
 
     public void registerNotifyCallback(CallbackContext callbackContext, String macAddress, UUID serviceUUID, UUID characteristicUUID) {
         // If the peripheral doesnt exist or isnt connected we can error our
-        if (activePeripheral == null) {
+        final Peripheral peripheral = peripherals.get(macAddress);
+        if (peripheral == null) {
             Log.d(TAG, "no active peripheral");
             callbackContext.error("Unable to register for notifications because " + macAddress + " not found");
             return;
         }
-        activePeripheral.registerNotifyCallback(callbackContext, serviceUUID, characteristicUUID);
+        peripheral.registerNotifyCallback(callbackContext, serviceUUID, characteristicUUID);
     }
 
 
     public void findLowEnergyDevices(CallbackContext callbackContext, UUID[] serviceUUIDs) {
         Log.d(TAG, "findLowEnergyDevices() initiating scan" + activeState.toString());
         // this is set u so we can fire from the onLeScan
+        peripherals.clear();
         discoverCallback = callbackContext;
         bluetoothAdapter.startLeScan(this);
         PluginResult result = new PluginResult(PluginResult.Status.NO_RESULT);
@@ -295,6 +328,11 @@ public class BLECentralPlugin extends CordovaPlugin implements BluetoothAdapter.
             PluginResult result = new PluginResult(PluginResult.Status.OK, peripheral.asJSONObject());
             result.setKeepCallback(true);
             discoverCallback.sendPluginResult(result);
+        }
+
+        String macAddress = device.getAddress();
+        if (!peripherals.containsKey(macAddress)) {
+            peripherals.put(macAddress, peripheral);
         }
     }
 
