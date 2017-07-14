@@ -84,6 +84,7 @@ public class Peripheral extends BluetoothGattCallback {
     public void close(CallbackContext callbackContext) {
         Log.d(TAG, "Attempting to disconnect from a Peripheral.");
         connected = false;
+        servicesDiscovered = false;
         commandContext = callbackContext;
         expectDisconnect = true;
         processing = true;
@@ -165,6 +166,7 @@ public class Peripheral extends BluetoothGattCallback {
               Log.d(TAG, "SUCCESSFULLY DISCONNECTED");
               gatt.close();
               connected = false;
+              servicesDiscovered = false;
           }
         } else {
           // Error
@@ -211,8 +213,8 @@ public class Peripheral extends BluetoothGattCallback {
         }
 
         // If we were disconnected in the meantime
-        if (!connected && !servicesDiscovered) {
-            Log.d(TAG, "You have been disconnected");
+        if (!connected || !servicesDiscovered) {
+            Log.d(TAG, "You have been disconnected or not ready");
             return;
         }
 
@@ -269,6 +271,7 @@ public class Peripheral extends BluetoothGattCallback {
 
     public void setDisconnected() {
         connected = false;
+        servicesDiscovered = false;
         Log.d(TAG, "Peripheral Disconnected " + device.getAddress());
     }
 
