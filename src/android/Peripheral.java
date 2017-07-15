@@ -67,6 +67,7 @@ public class Peripheral extends BluetoothGattCallback {
     // COMMANDS
 
     public void connect(CallbackContext callbackContext, Activity activity) {
+        expectDisconnect = false;
         connectionAttempt = 1;
         commandContext = callbackContext;
         this.activity = activity;
@@ -74,8 +75,12 @@ public class Peripheral extends BluetoothGattCallback {
     }
 
     private void reconnect() {
+        if (expectDisconnect) {
+            // We are no longer trying to connect
+            return;
+        }
+
         Log.d(TAG, "Attempting to establish new connection to Peripheral, attempt: " + connectionAttempt);
-        expectDisconnect = false;
         processing = true;
         BluetoothDevice device = this.device;
         gatt = device.connectGatt(activity, false, this);
@@ -115,8 +120,12 @@ public class Peripheral extends BluetoothGattCallback {
         super.onServicesDiscovered(gatt, status);
         Log.d(TAG, "Attempting to discover Peripheral services"+ status);
 
-        // If we have not been able to discover services what should we do?
         if (status != BluetoothGatt.GATT_SUCCESS) {
+            if (connected) {
+                // Unable to discover services, disconnect
+                close(commandContext);
+            }
+
             return;
         }
 
@@ -330,7 +339,6 @@ public class Peripheral extends BluetoothGattCallback {
             json.put("name", device.getName());
             json.put("id", device.getAddress()); // mac address
             json.put("advertising", byteArrayToJSON(advertisingData));
-            // TODO real RSSI if we have it, else
             json.put("rssi", advertisingRSSI);
         } catch (JSONException e) { // this shouldn't happen
             e.printStackTrace();
